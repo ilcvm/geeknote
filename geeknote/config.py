@@ -35,7 +35,7 @@ except:
     IS_OUT_TERMINAL = False
 
 # Application path
-APP_DIR = os.path.join(os.getenv("HOME") or os.getenv("USERPROFILE"), ".geeknote")
+APP_DIR = os.path.join(os.getenv("GEEKNOTE_HOME") or os.getenv("HOME") or os.getenv("USERPROFILE"), ".geeknote")
 ERROR_LOG = os.path.join(APP_DIR, "error.log")
 
 # Set default system editor

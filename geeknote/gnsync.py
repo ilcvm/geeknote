@@ -125,8 +125,12 @@ class GNSync:
             self.extension = ".md"
         elif format == "html":
             self.extension = ".html"
+        elif format == "enex":
+            self.extension = ".enex"  
         else:
             self.extension = ".txt"
+        
+        print ("Down note to {} file".format(self.format))          
 
         self.twoway = twoway
         self.download_only = download_only
@@ -306,7 +310,10 @@ class GNSync:
         Updates file from note
         """
         GeekNote().loadNoteContent(note)
-        content = Editor.ENMLtoText(note.content)
+        if self.format != "enex":
+            content = Editor.ENMLtoText(note.content)
+        else:
+            content = note.content        
         open(file_note['path'], "w").write(content)
         updated_seconds = note.updated / 1000.0
         os.utime(file_note['path'], (updated_seconds, updated_seconds))
@@ -347,7 +354,7 @@ class GNSync:
         escaped_title = re.sub(os.sep,'-', note.title)
 
         # Save images
-        if 'saveImages' in self.imageOptions and self.imageOptions['saveImages']:
+        if 'saveImages' in self.imageOptions and self.imageOptions['saveImages'] and self.format != "enex":
             imageList = Editor.getImages(note.content)
             if imageList:
                 if 'imagesInSubdir' in self.imageOptions and self.imageOptions['imagesInSubdir']:
@@ -363,7 +370,10 @@ class GNSync:
                     binaryHash = binascii.unhexlify(imageInfo['hash'])
                     GeekNote().saveMedia(note.guid, binaryHash, filename)
 
-        content = Editor.ENMLtoText(note.content, self.imageOptions)
+        if self.format != "enex":
+            content = Editor.ENMLtoText(note.content, self.imageOptions)
+        else:
+            content = note.content
         path = os.path.join(self.path, escaped_title + self.extension)
         open(path, "w").write(content)
         updated_seconds = note.updated / 1000.0
@@ -453,7 +463,7 @@ def main():
         parser = argparse.ArgumentParser()
         parser.add_argument('--path', '-p', action='store', help='Path to synchronize directory')
         parser.add_argument('--mask', '-m', action='store', help='Mask of files to synchronize. Default is "*.*"')
-        parser.add_argument('--format', '-f', action='store', default='plain', choices=['plain', 'markdown', 'html'], help='The format of the file contents. Default is "plain". Valid values are "plain" "html" and "markdown"')
+        parser.add_argument('--format', '-f', action='store', default='plain', choices=['plain', 'markdown', 'html','enex'], help='The format of the file contents. Default is "plain". Valid values are "plain" "html" and "markdown"')
         parser.add_argument('--notebook', '-n', action='store', help='Notebook name for synchronize. Default is default notebook unless all is selected')
         parser.add_argument('--all', '-a', action='store_true', help='Synchronize all notebooks', default=False)
         parser.add_argument('--logpath', '-l', action='store', help='Path to log file. Default is GeekNoteSync in home dir')
@@ -465,7 +475,7 @@ def main():
 
         args = parser.parse_args()
 
-        path = args.path if args.path else None
+        path = args.path if args.path else "."
         mask = args.mask if args.mask else None
         format = args.format if args.format else None
         notebook = args.notebook if args.notebook else None
@@ -487,7 +497,7 @@ def main():
                 escaped_notebook = re.sub(os.sep, '-', notebook)
                 notebook_path = os.path.join(path, escaped_notebook)
                 if not os.path.exists(notebook_path):
-                    os.mkdir(escaped_notebook_path)
+                    os.mkdir(notebook_path)
                 GNS = GNSync(notebook, notebook_path, mask, format, twoway, download_only, nodownsync, imageOptions)
                 GNS.sync()
         else:
