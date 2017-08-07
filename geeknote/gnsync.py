@@ -11,18 +11,33 @@ import re
 import hashlib
 import binascii
 import mimetypes
+import traceback
+
+import locale
 
 import evernote.edam.type.ttypes as Types
 from evernote.edam.limits.constants import EDAM_USER_NOTES_MAX
 from bs4 import BeautifulSoup
+
 
 import config
 from geeknote import GeekNote
 from storage import Storage
 from editor import Editor
 import tools
+import geeknote
+import enex
 
+import lxml.etree as ET
+from lxml.etree import SubElement
+# import xml.etree.ElementTree as ET
+# from xml.etree.ElementTree import SubElement
 
+from xml.sax.saxutils import escape, unescape
+from time import gmtime,strftime 
+import base64
+
+os_encoding = locale.getpreferredencoding()
 # set default logger (write log to file)
 def_logpath = os.path.join(config.APP_DIR, 'gnsync.log')
 formatter = logging.Formatter('%(asctime)-15s : %(message)s')
@@ -46,6 +61,8 @@ def log(func):
         try:
             return func(*args, **kwargs)
         except Exception, e:
+            print e
+            traceback.print_exc()
             logger.error("%s", str(e))
     return wrapper
 
@@ -82,6 +99,7 @@ def all_notebooks():
     return [notebook.name for notebook in geeknote.findNotebooks()]
 
 
+
 class GNSync:
 
     notebook_name = None
@@ -90,7 +108,7 @@ class GNSync:
     twoway = None
     download_only = None
     nodownsync = None
-
+    user_info = None
     notebook_guid = None
     all_set = False
 
@@ -130,7 +148,7 @@ class GNSync:
         else:
             self.extension = ".txt"
         
-        print ("Down note to {} file".format(self.format))          
+        print ("Download notebook {} in {} file".format(notebook_name, self.format))          
 
         self.twoway = twoway
         self.download_only = download_only
@@ -144,6 +162,8 @@ class GNSync:
 
         # set image options
         self.imageOptions = imageOptions
+        
+        self.user_info = GeekNote().getUserInfo()
 
         # all is Ok
         self.all_set = True
@@ -202,7 +222,7 @@ class GNSync:
             for n in notes:
                 has_file = False
                 for f in files:
-                    if f['name'] == n.title:
+                    if f['name'].decode(os_encoding) == n.title.decode('utf8'):
                         has_file = True
                         if f['mtime'] < n.updated:
                             self._update_file(f, n)
@@ -303,18 +323,20 @@ class GNSync:
             raise Exception('Note "{0}" was not updated'.format(note.title))
 
         return result
-
+    
+           
     @log
     def _update_file(self, file_note, note):
         """
         Updates file from note
         """
         GeekNote().loadNoteContent(note)
+        print ("update {}".format(file_note['path']))
         if self.format != "enex":
-            content = Editor.ENMLtoText(note.content)
+            open(file_note['path'], "w").write(content)
+            content = Editor.ENMLtoText(note.content)            
         else:
-            content = note.content        
-        open(file_note['path'], "w").write(content)
+            enex.note_to_file( note, file_note['path'])
         updated_seconds = note.updated / 1000.0
         os.utime(file_note['path'], (updated_seconds, updated_seconds))
 
@@ -351,31 +373,32 @@ class GNSync:
         """
         GeekNote().loadNoteContent(note)
 
-        escaped_title = re.sub(os.sep,'-', note.title)
-
-        # Save images
-        if 'saveImages' in self.imageOptions and self.imageOptions['saveImages'] and self.format != "enex":
-            imageList = Editor.getImages(note.content)
-            if imageList:
-                if 'imagesInSubdir' in self.imageOptions and self.imageOptions['imagesInSubdir']:
-                    os.mkdir(os.path.join(self.path, escaped_title + "_images"))
-                    imagePath = os.path.join(self.path, escaped_title + "_images", escaped_title)
-                    self.imageOptions['baseFilename'] = escaped_title + "_images/" + escaped_title
-                else:
-                    imagePath = os.path.join(self.path, escaped_title)
-                    self.imageOptions['baseFilename'] = escaped_title
-                for imageInfo in imageList:
-                    filename = "{}-{}.{}".format(imagePath, imageInfo['hash'], imageInfo['extension'])
-                    logger.info('Saving image to {}'.format(filename))
-                    binaryHash = binascii.unhexlify(imageInfo['hash'])
-                    GeekNote().saveMedia(note.guid, binaryHash, filename)
-
+        escaped_title = note.title.replace(os.sep,'-')            
+        path = os.path.join(self.path, escaped_title.decode('utf8').encode(os_encoding) + self.extension)
+        
         if self.format != "enex":
+            # Save images
+            if 'saveImages' in self.imageOptions and self.imageOptions['saveImages'] and self.format != "enex":
+                imageList = Editor.getImages(note.content)
+                if imageList:
+                    if 'imagesInSubdir' in self.imageOptions and self.imageOptions['imagesInSubdir']:
+                        os.mkdir(os.path.join(self.path, escaped_title + "_images"))
+                        imagePath = os.path.join(self.path, escaped_title + "_images", escaped_title)
+                        self.imageOptions['baseFilename'] = escaped_title + "_images/" + escaped_title
+                    else:
+                        imagePath = os.path.join(self.path, escaped_title)
+                        self.imageOptions['baseFilename'] = escaped_title
+                    for imageInfo in imageList:
+                        filename = "{}-{}.{}".format(imagePath, imageInfo['hash'], imageInfo['extension'])
+                        logger.info('Saving image to {}'.format(filename))
+                        binaryHash = binascii.unhexlify(imageInfo['hash'])
+                        GeekNote().saveMedia(note.guid, binaryHash, filename)
             content = Editor.ENMLtoText(note.content, self.imageOptions)
+            open(path, "w").write(content)
         else:
-            content = note.content
-        path = os.path.join(self.path, escaped_title + self.extension)
-        open(path, "w").write(content)
+            enex.note_to_file(note, path)
+            
+        logger.info( "create file {}".format(path))
         updated_seconds = note.updated / 1000.0
         os.utime(path, (updated_seconds, updated_seconds))
         return True
@@ -439,7 +462,9 @@ class GNSync:
 
         files = []
         for f in file_paths:
-            if os.path.isfile(f):
+            if self.format == "enex":
+                files.append(enex.get_info_from_file(f))    
+            elif os.path.isfile(f):
                 file_name = os.path.basename(f)
                 file_name = os.path.splitext(file_name)[0]
 
@@ -494,7 +519,8 @@ def main():
         if args.all:
             for notebook in all_notebooks():
                 logger.info("Syncing notebook %s", notebook)
-                escaped_notebook = re.sub(os.sep, '-', notebook)
+#                 escaped_notebook = re.sub(os.sep, '-', notebook)
+                escaped_notebook = notebook.replace(os.sep, '-')
                 notebook_path = os.path.join(path, escaped_notebook)
                 if not os.path.exists(notebook_path):
                     os.mkdir(notebook_path)
@@ -508,6 +534,8 @@ def main():
         pass
 
     except Exception, e:
+        print e
+        traceback.print_exc()        
         logger.error(str(e))
 
 if __name__ == "__main__":
